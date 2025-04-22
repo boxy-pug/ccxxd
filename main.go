@@ -21,6 +21,7 @@ type Config struct {
 
 func main() {
 	cfg := loadConfig()
+	//fmt.Println(cfg.seek)
 
 	printLines(cfg)
 
@@ -47,20 +48,13 @@ func loadConfig() Config {
 			fmt.Printf("error opening %v as file: %v", args[0], err)
 			os.Exit(1)
 		}
-		info, err := cfg.file.Stat()
-		if err != nil {
-			fmt.Printf("couldn't retrieve file stat for %v: %v", cfg.file, err)
-			os.Exit(1)
-		}
-		if cfg.len >= 0 {
-			cfg.endByte = cfg.len
-		} else {
-			cfg.endByte = info.Size()
-		}
-
 	} else if len(args) == 0 {
 		cfg.file = os.Stdin
 	}
+
+	cfg.endByte = getEndByte(cfg.len, cfg.file)
+
+	cfg.byteGrouping = validateByteGrouping(cfg.byteGrouping, cfg.cols)
 
 	return cfg
 }
@@ -78,7 +72,7 @@ func printLines(cfg Config) {
 
 	for offSetHex < cfg.endByte {
 		buffer := make([]byte, cfg.cols)
-		_, err := io.ReadFull(reader, buffer)
+		bytesRead, err := io.ReadFull(reader, buffer)
 		if err != nil {
 			fmt.Printf("error: %v", err)
 		}
@@ -87,14 +81,15 @@ func printLines(cfg Config) {
 		fmt.Printf("%08x: ", offSetHex)
 
 		// Printing hex octs
+
 		for i, byt := range buffer {
 			fmt.Printf("%02x", byt)
-			if (i+1)%2 == 0 {
+			if (i+1)%cfg.byteGrouping == 0 {
 				fmt.Printf(" ")
 			}
 			offSetHex++
 			if offSetHex == cfg.endByte {
-				printExtraSpace(len(buffer), i)
+				printExtraSpace(len(buffer), bytesRead)
 				break
 			}
 		}
@@ -111,7 +106,6 @@ func printLines(cfg Config) {
 				break
 			}
 		}
-
 		fmt.Println()
 	}
 }
@@ -125,5 +119,32 @@ func printExtraSpace(bufLen, index int) {
 	remainingSpace := missingBytes*2 + (missingBytes+1)/2
 	for range remainingSpace {
 		fmt.Printf(" ")
+	}
+}
+
+func getEndByte(len int64, file *os.File) int64 {
+	var res int64
+	info, err := file.Stat()
+	if err != nil {
+		fmt.Printf("couldn't retrieve file stat for %v: %v", file, err)
+		os.Exit(1)
+	}
+	if len >= 0 {
+		res = len
+	} else {
+		res = info.Size()
+	}
+	return res
+}
+
+func validateByteGrouping(bg, cols int) int {
+	if bg < 0 {
+		return 2
+	} else if bg == 0 {
+		return cols
+	} else if bg > cols {
+		return cols
+	} else {
+		return bg
 	}
 }
