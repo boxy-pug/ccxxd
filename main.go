@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
@@ -56,6 +57,10 @@ func loadConfig() Config {
 
 	cfg.byteGrouping = validateByteGrouping(cfg.byteGrouping, cfg.cols)
 
+	if cfg.littleEndianOutput && cfg.byteGrouping == 2 {
+		cfg.byteGrouping = 4
+	}
+
 	return cfg
 }
 
@@ -63,17 +68,19 @@ func printLines(cfg Config) {
 	offSetHex := cfg.seek
 	offSetChar := cfg.seek
 	reader := bufio.NewReader(cfg.file)
-	_, err := cfg.file.Seek(cfg.seek, 0)
 
-	if err != nil {
-		fmt.Printf("error setting offset: %v", err)
-		os.Exit(1)
+	if cfg.file != os.Stdin {
+		_, err := cfg.file.Seek(cfg.seek, 0)
+		if err != nil {
+			fmt.Printf("error setting offset: %v", err)
+			os.Exit(1)
+		}
 	}
 
 	for offSetHex < cfg.endByte {
 		buffer := make([]byte, cfg.cols)
 		bytesRead, err := io.ReadFull(reader, buffer)
-		if err != nil {
+		if err != nil && err != io.EOF {
 			fmt.Printf("error: %v", err)
 		}
 
@@ -81,19 +88,27 @@ func printLines(cfg Config) {
 		fmt.Printf("%08x: ", offSetHex)
 
 		// Printing hex octs
-
-		for i, byt := range buffer {
-			fmt.Printf("%02x", byt)
-			if (i+1)%cfg.byteGrouping == 0 {
-				fmt.Printf(" ")
+		if !cfg.littleEndianOutput {
+			for i, byt := range buffer {
+				fmt.Printf("%02x", byt)
+				if (i+1)%cfg.byteGrouping == 0 {
+					fmt.Printf(" ")
+				}
+				offSetHex++
+				if offSetHex == cfg.endByte {
+					printExtraSpace(len(buffer), bytesRead)
+					break
+				}
 			}
-			offSetHex++
+		} else {
+			offSetHex += printLittleEndianHex(buffer, cfg.byteGrouping)
 			if offSetHex == cfg.endByte {
 				printExtraSpace(len(buffer), bytesRead)
 				break
 			}
 		}
 
+		fmt.Printf(" ")
 		// Printing ascii
 		for _, charByt := range buffer {
 			if isValidASCII(charByt) {
@@ -147,4 +162,24 @@ func validateByteGrouping(bg, cols int) int {
 	} else {
 		return bg
 	}
+}
+
+func printLittleEndianHex(buffer []byte, byteGrouping int) int64 {
+
+	for i := 0; i < len(buffer); i += byteGrouping {
+		groupSize := byteGrouping
+		if i+byteGrouping > len(buffer) {
+			groupSize = len(buffer) - i
+		}
+		currentBuffer := make([]byte, groupSize)
+		copy(currentBuffer, buffer[i:i+groupSize])
+
+		for j := 0; j < groupSize/2; j++ {
+			currentBuffer[j], currentBuffer[groupSize-1-j] = currentBuffer[groupSize-1-j], currentBuffer[j]
+		}
+
+		fmt.Print(hex.EncodeToString(currentBuffer) + " ")
+	}
+
+	return int64(len(buffer))
 }
