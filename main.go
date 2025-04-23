@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 type Config struct {
@@ -22,7 +23,11 @@ type Config struct {
 
 func main() {
 	cfg := loadConfig()
-	//fmt.Println(cfg.seek)
+
+	if cfg.revert {
+		revertToBinary(cfg.file)
+		return
+	}
 
 	printLines(cfg)
 
@@ -182,4 +187,26 @@ func printLittleEndianHex(buffer []byte, byteGrouping int) int64 {
 	}
 
 	return int64(len(buffer))
+}
+
+func revertToBinary(file *os.File) {
+	writer := bufio.NewWriter(os.Stdout)
+	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+		line := strings.Split(scanner.Text()[10:], "  ")
+		cleanLine := strings.ReplaceAll(line[0], " ", "")
+		hexLine, err := hex.DecodeString(cleanLine)
+		if err != nil {
+			fmt.Errorf("error decoding string as hex: %v", err)
+		}
+		_, err = writer.Write(hexLine)
+		if err != nil {
+			fmt.Errorf("error writing to stdout: %v", err)
+		}
+		//fmt.Printf("%b", hexLine)
+		//fmt.Fprint(writer, hexLine, "\n")
+	}
+	writer.Flush()
+
 }
