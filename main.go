@@ -12,36 +12,39 @@ import (
 
 type command struct {
 	file               *os.File // Input file (or stdin)
-	endByte            int64    // Where to stop reading (byte offset)
-	littleEndianOutput bool     //-e Output in little-endian order
-	byteGrouping       int      // -g <int> default 2
-	cols               int      // -c <int> octets per line. default 16
-	len                int64    // -l <int> stop writing after len octets
-	seek               int64    // -s <offset> (which byte to start reading from)
-	revert             bool     // -r Reverse operation: convert (or patch) hex dump into binary
+	output             io.Writer
+	endByte            int64 // Where to stop reading (byte offset)
+	littleEndianOutput bool  //-e Output in little-endian order
+	byteGrouping       int   // -g <int> default 2
+	cols               int   // -c <int> octets per line. default 16
+	len                int64 // -l <int> stop writing after len octets
+	seek               int64 // -s <offset> (which byte to start reading from)
+	revert             bool  // -r Reverse operation: convert (or patch) hex dump into binary
 }
 
 func main() {
-	cfg, err := loadCommand()
+	cmd, err := loadCommand()
 	if err != nil {
 		fmt.Println("error loading command:", err)
 		os.Exit(1)
 	}
 
 	// If -r flag is set, convert hex dump to binary and exit
-	if cfg.revert {
-		revertToBinary(cfg.file)
+	if cmd.revert {
+		revertToBinary(cmd.file)
 		return
 	}
 
 	// perform normal hex dump
-	run(cfg)
+	cmd.run()
 }
 
 // Parses command-line arguments, sets up the command struct, and opens file/stdin
 func loadCommand() (command, error) {
 	var err error
-	var cmd command
+	cmd := command{
+		output: os.Stdout,
+	}
 
 	flag.BoolVar(&cmd.littleEndianOutput, "e", false, "Switch to little-endian hex dump.")
 	flag.BoolVar(&cmd.revert, "r", false, "Reverse operation: convert (or patch) hex dump into binary.")
@@ -81,77 +84,121 @@ func loadCommand() (command, error) {
 }
 
 // Main hex dump loop: reads bytes, formats, and prints each line
-func run(cfg command) {
-	offSetHex := cfg.seek  // Tracks current byte offset for hex display
-	offSetChar := cfg.seek // Tracks current byte offset for ASCII display
-	reader := bufio.NewReader(cfg.file)
-
+func (cmd *command) run() error {
 	// If input is a file, seek to requested offset
-	if cfg.file != os.Stdin {
-		_, err := cfg.file.Seek(cfg.seek, 0)
+	if cmd.file != os.Stdin {
+		_, err := cmd.file.Seek(cmd.seek, 0)
 		if err != nil {
-			fmt.Printf("error setting offset: %v", err)
-			os.Exit(1)
+			return fmt.Errorf("error setting offset: %v", err)
 		}
 	}
 
+	reader := bufio.NewReader(cmd.file)
+	offset := cmd.seek // Tracks current byte offset for hex display
+
 	// Loop until we've read up to endByte
-	for offSetHex < cfg.endByte {
-		buffer := make([]byte, cfg.cols) // Buffer for one output line
-		bytesRead, err := io.ReadFull(reader, buffer)
+	for offset < cmd.endByte {
+
+		// Pass in how many bytes were supposed to read
+		// which is the smallest of cols or bytes left until endbytes
+		length := min(int64(cmd.cols), cmd.endByte-offset)
+
+		lineBytes, err := cmd.readLine(reader, int(length))
 		if err != nil {
-			if err == io.EOF && bytesRead == 0 {
-				break // end of file, nothing to read
-			}
-			if err != io.EOF && err != io.ErrUnexpectedEOF {
-				fmt.Printf("error: %v", err)
+			if err == io.EOF {
 				break
 			}
-			// For io.ErrUnexpectedEOF, we still want to print the partial buffer
+			return err
 		}
 
-		// Print the offset at the start of the line (8 hex digits)
-		fmt.Printf("%08x: ", offSetHex)
+		cmd.printLine(offset, lineBytes)
+		offset += int64(len(lineBytes))
+	}
+	return nil
+}
 
-		// Printing hex bytes
-		if !cfg.littleEndianOutput {
-			// Normal hex output
-			for i, byt := range buffer[:bytesRead] {
-				fmt.Printf("%02x", byt) // Print byte as two hex digits
-				if (i+1)%cfg.byteGrouping == 0 {
-					fmt.Printf(" ") // Space after each group
-				}
-				offSetHex++
-				// Stop if we've reached the end
-				if offSetHex == cfg.endByte {
-					printExtraSpace(cfg.cols, bytesRead, cfg.byteGrouping)
-					break
-				}
+func (cmd *command) readLine(reader *bufio.Reader, length int) ([]byte, error) {
+	buf := make([]byte, length) // Buffer for one output line
+	n, err := reader.Read(buf)
+	if n == 0 && err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
+
+func (cmd *command) printLine(offset int64, line []byte) {
+	lineLength := len(line)
+	// Print the offset at the start of the line (8 hex digits)
+	fmt.Fprintf(cmd.output, "%08x: ", offset)
+
+	if !cmd.littleEndianOutput {
+		cmd.printHex(line)
+	} else {
+		// needs to return bytecount bcs of left side padding added
+		lineLength = cmd.printLittleEndianHex(line)
+	}
+	fmt.Fprint(cmd.output, " ")
+	cmd.printHexPadding(lineLength)
+	cmd.printASCII(line)
+	fmt.Fprintln(cmd.output)
+}
+
+// printHex prints normal (big-endian) hex output, grouped as specified.
+// This function prints each byte as two hex digits, inserting a space after every 'byteGrouping' bytes.
+func (cmd *command) printHex(line []byte) {
+	var res strings.Builder
+	for i, b := range line {
+		res.WriteString(fmt.Sprintf("%02x", b)) // Print byte as two hex digits
+		if (i+1)%cmd.byteGrouping == 0 {
+			res.WriteString(" ")
+		}
+	}
+	fmt.Fprint(cmd.output, res.String())
+}
+
+// printLittleEndianHex prints the buffer as little-endian hex, grouped by byteGrouping.
+// reverses the bytes within each group before printing
+func (cmd *command) printLittleEndianHex(line []byte) int {
+	var res strings.Builder
+	length := len(line)
+
+	for i := 0; i < len(line); i += cmd.byteGrouping {
+		// Compute the end index for this group. If we're at the end of the line and don't have a full group,
+		// 'end' will be less than i+cmd.byteGrouping.
+		start := i
+		end := i + cmd.byteGrouping
+		end = min(end, len(line))
+
+		// Add left side padding to byte group
+		if end-start < cmd.byteGrouping {
+			for range cmd.byteGrouping - (end - start) {
+				res.WriteString("  ")
+				length++
 			}
+		}
+		// Print the bytes of this group in reverse order (for little-endian display).
+		if start < len(line) {
+			for j := end - 1; j >= start; j-- {
+				res.WriteString(fmt.Sprintf("%02x", line[j])) // Print byte as two hex digits
+			}
+			// After each group, insert a space to separate groups visually.
+			res.WriteString(" ")
+		}
+	}
+	// to make it line up?
+	res.WriteString(" ")
+	fmt.Fprint(cmd.output, res.String())
+	return length
+}
+
+// Print ASCII representation (print '.' for non-printable)
+func (cmd *command) printASCII(line []byte) {
+	for _, b := range line {
+		if isValidASCII(b) {
+			fmt.Fprintf(cmd.output, "%s", string(b))
 		} else {
-			// Little-endian output: print each group reversed
-			offSetHex += printLittleEndianHex(buffer[:bytesRead], cfg.byteGrouping)
-			if offSetHex == cfg.endByte {
-				printExtraSpace(cfg.cols, bytesRead, cfg.byteGrouping)
-				break
-			}
+			fmt.Fprint(cmd.output, ".")
 		}
-
-		// Print space between hex and ascii
-		fmt.Printf(" ")
-		// Print ASCII representation (print '.' for non-printable)
-		for _, charByt := range buffer[:bytesRead] {
-			if isValidASCII(charByt) {
-				fmt.Printf("%s", string(charByt))
-			} else {
-				fmt.Printf(".")
-			}
-			offSetChar++
-			if offSetChar == cfg.endByte {
-				break
-			}
-		}
-		fmt.Println() // End of line
 	}
 }
 
@@ -161,12 +208,12 @@ func isValidASCII(b byte) bool {
 }
 
 // Prints extra spaces at end of short lines, so ASCII lines up
-func printExtraSpace(totalCols, bytesRead, byteGrouping int) {
+func (cmd *command) printHexPadding(bytesRead int) {
 	// For each missing byte, print "  " instead of hex
-	for i := bytesRead; i < totalCols; i++ {
+	for i := bytesRead; i < cmd.cols; i++ {
 		fmt.Print("  ")
 		// Add group space if this would have been a group boundary
-		if (i+1)%byteGrouping == 0 {
+		if (i+1)%cmd.byteGrouping == 0 {
 			fmt.Print(" ")
 		}
 	}
@@ -199,27 +246,6 @@ func validateByteGrouping(bg, cols int) int {
 	} else {
 		return bg
 	}
-}
-
-// Prints buffer as little-endian hex, grouped by byteGrouping
-func printLittleEndianHex(buffer []byte, byteGrouping int) int64 {
-	for i := 0; i < len(buffer); i += byteGrouping {
-		groupSize := byteGrouping
-		if i+byteGrouping > len(buffer) {
-			groupSize = len(buffer) - i
-		}
-		currentBuffer := make([]byte, groupSize)
-		copy(currentBuffer, buffer[i:i+groupSize])
-
-		// Reverse the bytes in the group (for little-endian)
-		for j := 0; j < groupSize/2; j++ {
-			currentBuffer[j], currentBuffer[groupSize-1-j] = currentBuffer[groupSize-1-j], currentBuffer[j]
-		}
-
-		fmt.Print(hex.EncodeToString(currentBuffer) + " ")
-	}
-
-	return int64(len(buffer))
 }
 
 // Reads hex dump from file, decodes, and writes raw binary to stdout

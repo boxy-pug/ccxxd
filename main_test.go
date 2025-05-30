@@ -53,7 +53,6 @@ func TestXxdUnit(t *testing.T) {
 		}
 	})
 
-	// Failing because of formatting
 	t.Run("stop writing after -l octets", func(t *testing.T) {
 		for _, testFile := range testFiles {
 			cmd := exec.Command("./ccxxd", "-l", "6", testFile)
@@ -61,6 +60,20 @@ func TestXxdUnit(t *testing.T) {
 			assertNoError(t, err)
 
 			unixCmd := exec.Command("xxd", "-l", "6", testFile)
+			want, err := unixCmd.Output()
+			assertNoError(t, err)
+
+			assertEqual(t, string(got), string(want))
+		}
+	})
+
+	t.Run("combining little endian -e and bytegrouping flag -g 4", func(t *testing.T) {
+		for _, testFile := range testFiles {
+			cmd := exec.Command("./ccxxd", "-e", "-g", "4", testFile)
+			got, err := cmd.Output()
+			assertNoError(t, err)
+
+			unixCmd := exec.Command("xxd", "-e", "-g", "4", testFile)
 			want, err := unixCmd.Output()
 			assertNoError(t, err)
 
