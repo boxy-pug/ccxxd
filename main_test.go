@@ -81,6 +81,64 @@ func TestXxdUnit(t *testing.T) {
 		}
 	})
 
+	t.Run("combining -g 6 and -c 10", func(t *testing.T) {
+		for _, testFile := range testFiles {
+			cmd := exec.Command("./ccxxd", "-c", "10", "-g", "5", testFile)
+			got, err := cmd.Output()
+			assertNoError(t, err)
+
+			unixCmd := exec.Command("xxd", "-c", "10", "-g", "5", testFile)
+			want, err := unixCmd.Output()
+			assertNoError(t, err)
+
+			assertEqual(t, string(got), string(want))
+		}
+	})
+
+	t.Run("combining -g 5 and -c 13", func(t *testing.T) {
+		for _, testFile := range testFiles {
+			cmd := exec.Command("./ccxxd", "-c", "13", "-g", "5", testFile)
+			got, err := cmd.Output()
+			assertNoError(t, err)
+
+			unixCmd := exec.Command("xxd", "-c", "13", "-g", "5", testFile)
+			want, err := unixCmd.Output()
+			assertNoError(t, err)
+
+			assertEqual(t, string(got), string(want))
+		}
+	})
+
+	t.Run("combining -g 3 and -c 8", func(t *testing.T) {
+		for _, testFile := range testFiles {
+			cmd := exec.Command("./ccxxd", "-c", "8", "-g", "3", testFile)
+			got, err := cmd.Output()
+			assertNoError(t, err)
+
+			unixCmd := exec.Command("xxd", "-c", "8", "-g", "3", testFile)
+			want, err := unixCmd.Output()
+			assertNoError(t, err)
+
+			assertEqual(t, string(got), string(want))
+		}
+	})
+
+	// TODO failing cus formatting spaces before ascii, or error?
+	// failing if you add -g 3 to this
+	t.Run("combining -c 8 and endian -e", func(t *testing.T) {
+		for _, testFile := range testFiles {
+			cmd := exec.Command("./ccxxd", "-e", "-c", "8", testFile)
+			got, err := cmd.Output()
+			assertNoError(t, err)
+
+			unixCmd := exec.Command("xxd", "-e", "-c", "8", testFile)
+			want, err := unixCmd.Output()
+			assertNoError(t, err)
+
+			assertEqual(t, string(got), string(want))
+		}
+	})
+
 	t.Run("seeking to specific byte start with -s", func(t *testing.T) {
 		for _, testFile := range testFiles {
 			cmd := exec.Command("./ccxxd", "-s", "10", testFile)

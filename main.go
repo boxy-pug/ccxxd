@@ -153,6 +153,11 @@ func (cmd *command) printHex(line []byte) {
 			res.WriteString(" ")
 		}
 	}
+	// formattin inconsistencies csn be fixed here i guess
+	// res.WriteString(" ")
+	if cmd.cols%cmd.byteGrouping != 0 {
+		res.WriteString(" ")
+	}
 	fmt.Fprint(cmd.output, res.String())
 }
 
@@ -249,7 +254,7 @@ func validateByteGrouping(bg, cols int) int {
 }
 
 // Reads hex dump from file, decodes, and writes raw binary to stdout
-func revertToBinary(file *os.File) {
+func revertToBinary(file *os.File) error {
 	writer := bufio.NewWriter(os.Stdout)
 	scanner := bufio.NewScanner(file)
 
@@ -259,12 +264,13 @@ func revertToBinary(file *os.File) {
 		cleanLine := strings.ReplaceAll(line[0], " ", "") // Remove spaces from hex
 		hexLine, err := hex.DecodeString(cleanLine)       // Decode hex to bytes
 		if err != nil {
-			fmt.Errorf("error decoding string as hex: %v", err)
+			return fmt.Errorf("error decoding string as hex: %v", err)
 		}
 		_, err = writer.Write(hexLine)
 		if err != nil {
-			fmt.Errorf("error writing to stdout: %v", err)
+			return fmt.Errorf("error writing to stdout: %v", err)
 		}
 	}
 	writer.Flush()
+	return nil
 }
