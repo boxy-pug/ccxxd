@@ -133,44 +133,42 @@ func (cmd *command) readLine(reader *bufio.Reader, length int) ([]byte, error) {
 }
 
 func (cmd *command) printLine(offset int64, line []byte) {
+	var builder strings.Builder
 	lineLength := len(line)
 	// Print the offset at the start of the line (8 hex digits)
-	fmt.Fprintf(cmd.output, "%08x: ", offset)
+	fmt.Fprintf(&builder, "%08x: ", offset)
 
 	if !cmd.littleEndianOutput {
-		cmd.printHex(line)
+		cmd.printHex(line, &builder)
 	} else {
 		// needs to return bytecount bcs of left side padding added
-		lineLength = cmd.printLittleEndianHex(line)
+		lineLength = cmd.printLittleEndianHex(line, &builder)
 	}
-	fmt.Fprint(cmd.output, " ")
-	cmd.printHexPadding(lineLength)
-	cmd.printASCII(line)
-	fmt.Fprintln(cmd.output)
+	fmt.Fprint(&builder, " ")
+	cmd.printHexPadding(lineLength, &builder)
+	cmd.printASCII(line, &builder)
+	fmt.Fprintln(cmd.output, builder.String())
 }
 
 // printHex prints normal (big-endian) hex output, grouped as specified.
 // This function prints each byte as two hex digits, inserting a space after every 'byteGrouping' bytes.
-func (cmd *command) printHex(line []byte) {
-	var res strings.Builder
+func (cmd *command) printHex(line []byte, builder *strings.Builder) {
 	for i, b := range line {
-		res.WriteString(fmt.Sprintf("%02x", b)) // Print byte as two hex digits
+		fmt.Fprintf(builder, "%02x", b)
 		if (i+1)%cmd.byteGrouping == 0 {
-			res.WriteString(" ")
+			builder.WriteString(" ")
 		}
 	}
 	// formattin inconsistencies csn be fixed here i guess
 	// res.WriteString(" ")
 	if cmd.cols%cmd.byteGrouping != 0 {
-		res.WriteString(" ")
+		builder.WriteString(" ")
 	}
-	fmt.Fprint(cmd.output, res.String())
 }
 
 // printLittleEndianHex prints the buffer as little-endian hex, grouped by byteGrouping.
 // reverses the bytes within each group before printing
-func (cmd *command) printLittleEndianHex(line []byte) int {
-	var res strings.Builder
+func (cmd *command) printLittleEndianHex(line []byte, builder *strings.Builder) int {
 	length := len(line)
 
 	for i := 0; i < len(line); i += cmd.byteGrouping {
@@ -183,32 +181,31 @@ func (cmd *command) printLittleEndianHex(line []byte) int {
 		// Add left side padding to byte group
 		if end-start < cmd.byteGrouping {
 			for range cmd.byteGrouping - (end - start) {
-				res.WriteString("  ")
+				builder.WriteString("  ")
 				length++
 			}
 		}
 		// Print the bytes of this group in reverse order (for little-endian display).
 		if start < len(line) {
 			for j := end - 1; j >= start; j-- {
-				res.WriteString(fmt.Sprintf("%02x", line[j])) // Print byte as two hex digits
+				fmt.Fprintf(builder, "%02x", line[j]) // Print byte as two hex digits
 			}
 			// After each group, insert a space to separate groups visually.
-			res.WriteString(" ")
+			builder.WriteString(" ")
 		}
 	}
 	// to make it line up?
-	res.WriteString(" ")
-	fmt.Fprint(cmd.output, res.String())
+	builder.WriteString(" ")
 	return length
 }
 
 // Print ASCII representation (print '.' for non-printable)
-func (cmd *command) printASCII(line []byte) {
+func (cmd *command) printASCII(line []byte, builder *strings.Builder) {
 	for _, b := range line {
 		if isValidASCII(b) {
-			fmt.Fprintf(cmd.output, "%s", string(b))
+			fmt.Fprintf(builder, "%s", string(b))
 		} else {
-			fmt.Fprint(cmd.output, ".")
+			fmt.Fprint(builder, ".")
 		}
 	}
 }
@@ -219,13 +216,13 @@ func isValidASCII(b byte) bool {
 }
 
 // Prints extra spaces at end of short lines, so ASCII lines up
-func (cmd *command) printHexPadding(bytesRead int) {
+func (cmd *command) printHexPadding(bytesRead int, builder *strings.Builder) {
 	// For each missing byte, print "  " instead of hex
 	for i := bytesRead; i < cmd.cols; i++ {
-		fmt.Print("  ")
+		builder.WriteString("  ")
 		// Add group space if this would have been a group boundary
 		if (i+1)%cmd.byteGrouping == 0 {
-			fmt.Print(" ")
+			builder.WriteString(" ")
 		}
 	}
 }
