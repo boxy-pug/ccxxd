@@ -14,7 +14,7 @@ type command struct {
 	file               *os.File // Input file (or stdin)
 	output             io.Writer
 	endByte            int64 // Where to stop reading (byte offset)
-	littleEndianOutput bool  //-e Output in little-endian order
+	littleEndianOutput bool  // -e Output in little-endian order
 	byteGrouping       int   // -g <int> default 2
 	cols               int   // -c <int> octets per line. default 16
 	len                int64 // -l <int> stop writing after len octets
@@ -69,7 +69,6 @@ func loadCommand() (command, error) {
 		return cmd, fmt.Errorf("too many args, check usage: %v", args)
 	}
 
-	// Compute where to stop reading (endByte)
 	cmd.endByte = getEndByte(cmd.len, cmd.file)
 
 	// Validate and fix up byte grouping as needed
@@ -119,11 +118,18 @@ func (cmd *command) run() error {
 
 func (cmd *command) readLine(reader *bufio.Reader, length int) ([]byte, error) {
 	buf := make([]byte, length) // Buffer for one output line
-	n, err := reader.Read(buf)
-	if n == 0 && err != nil {
-		return nil, err
+	n, err := io.ReadFull(reader, buf)
+	// end of file, nothing to read:
+	if err == io.EOF && n == 0 {
+		return nil, io.EOF
 	}
-	return buf, nil
+	if err == io.ErrUnexpectedEOF || err == nil {
+		return buf[:n], nil // partial read at eof
+	}
+	if err != nil {
+		return nil, err // other, real errs
+	}
+	return buf[:n], nil
 }
 
 func (cmd *command) printLine(offset int64, line []byte) {
