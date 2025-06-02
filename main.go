@@ -19,16 +19,16 @@ const (
 )
 
 type command struct {
-	input        io.Reader // Input file (or stdin)
-	output       io.Writer
-	endOffset    int64 // Where to stop reading (byte offset)
-	littleEndian bool  // -e Output in little-endian order
-	groupSize    int   // -g <int> default 2, byte grouping
-	bytesPerLine int   // -c <int> octets per line. default 16
-	maxBytes     int64 // -l <int> stop writing after len octets
-	startOffset  int64 // -s <offset> (which byte to start reading from)
-	revert       bool  // -r Reverse operation: convert (or patch) hex dump into binary
-	wantedWidth  int   // Helper for little endian formatting
+	input          io.Reader // Input file (or stdin)
+	output         io.Writer
+	endOffset      int64 // Where to stop reading (byte offset)
+	littleEndian   bool  // -e Output in little-endian order
+	groupSize      int   // -g <int> default 2, byte grouping
+	bytesPerLine   int   // -c <int> octets per line. default 16
+	maxBytes       int64 // -l <int> stop writing after len octets
+	startOffset    int64 // -s <offset> (which byte to start reading from)
+	revert         bool  // -r Reverse operation: convert (or patch) hex dump into binary
+	wantedHexWidth int   // Helper for little endian formatting
 }
 
 func main() {
@@ -107,7 +107,7 @@ func (cmd *command) run() error {
 	}
 
 	if cmd.littleEndian {
-		cmd.wantedWidth = hexFieldWidth(cmd.bytesPerLine, cmd.groupSize)
+		cmd.wantedHexWidth = hexFieldWidth(cmd.bytesPerLine, cmd.groupSize)
 	}
 
 	// If input is a file, seek to requested offset
@@ -176,7 +176,6 @@ func (cmd *command) printLine(offset int64, line []byte) {
 		// needs to return bytecount bcs of left side padding added
 		lineLength = cmd.printLittleEndianHex(line, &builder)
 	}
-	// fmt.Fprint(&builder, " ")
 	cmd.printHexPadding(lineLength, &builder)
 	cmd.printASCII(line, &builder)
 	fmt.Fprintln(cmd.output, builder.String())
@@ -253,7 +252,7 @@ func (cmd *command) printHexPadding(bytesRead int, builder *strings.Builder) {
 	if cmd.littleEndian {
 		// fmt.Printf("builder len is %v and cmd wanted width is %v\n", builder.Len(), cmd.wantedWidth)
 		// the 12 is the chars for offset printing
-		for builder.Len() < cmd.wantedWidth {
+		for builder.Len() < cmd.wantedHexWidth {
 			// fmt.Printf("builder len is %v and cmd wanted width is %v\n", builder.Len(), cmd.wantedWidth)
 			builder.WriteString(" ")
 		}
