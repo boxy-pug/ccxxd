@@ -12,7 +12,7 @@ import (
 
 var testFiles = getTestFiles("./testdata/")
 
-func TestXxdUnit(t *testing.T) {
+func TestXxdIntegration(t *testing.T) {
 	t.Run("xxd no flags", func(t *testing.T) {
 		for _, testFile := range testFiles {
 			cmd := exec.Command("./ccxxd", testFile)

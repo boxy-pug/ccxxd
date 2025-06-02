@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestRun(t *testing.T) {
+func TestXxdUnitRun(t *testing.T) {
 	tests := []struct {
 		name         string
 		bytesPerLine int
