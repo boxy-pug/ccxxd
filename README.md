@@ -2,7 +2,7 @@
 
 `xxd` cli tool clone written in Go, built as a learning project for [CodingChallenges.fyi](https://codingchallenges.fyi/challenges/challenge-xxd).
 
-This tool displays a hex dump of any file or standard input, like the classic `xxd` utility. It supports grouping bytes, custom column widths, little-endian output, offset and length control, and can also reverse a hex dump back into binary.  
+This tool displays a hex dump of any file or standard input, like the classic `xxd` utility. It supports grouping bytes (`-g`), custom column widths (`-c`), little-endian output (`-e`), offset (`-s`) and length control (`-l`), and can also reverse a hex dump back into binary (`-r`).
 
 ## 🛠️ Usage
 
@@ -48,12 +48,12 @@ This will place the `ccxxd` binary in your `$GOPATH/bin` or `$GOBIN` directory. 
 
 **Unit tests:**  
 Run with `go test`.  
-These check the core logic and formatting in-memory—no system `xxd` needed.
+These check the core logic and formatting in-memory.
 
 **Integration tests:**  
 Compare this tool's output to your system's `xxd`.  
-Requires `xxd` installed and output might differ slightly on other systems or OSes.  
-Not run by default. To run them:
+Requires `xxd` installed, and if your local implementation differ slightly in formatting the tests will not pass.
+Therefore they're not run by default. To run them:
 
 ```sh
 go test -tags=integration
@@ -61,12 +61,12 @@ go test -tags=integration
 
 ## 🧠 What I learned
 
+-   All files are just bytes: I guess i knew this, but building this tool made me realize it more directly: text, images, and programs are just different sequences of bytes on disk. Reverting a hex dump restores the original file exactly, so even executables work after chmod +x. Writing bytes directly (not as text) is what makes the file truly identical to the original.
 -   Newlines and special chars in test data caused confusing test failures, invisible trailing newlines etc. Use `echo -n` flag for suppressing trailing newlines.
 -   `printf` command could be used instead, more consistent, does not add newline.
 -   In the shell, single quotes `'...'` treat everything inside as literal text, so special characters and escape sequences like `\n` are not interpreted. Double quotes `"..."` allow for variable expansion and escape sequences, so `\n` becomes a real newline.
--   I first used `bufio.Reader.Read` for reading lines, but it can return fewer bytes than requested even if there's more data to read, which caused short lines to appear in the middle of the hex dump. `io.ReadFull` keeps reading until the buffer is full or EOF, so now only the last line can be short – this matches what real hex dump tools like xxd do.               
--   Instead of writing each thing directly to stdout, use `strings.Builder` to build the whole line in memory first. Writing to stdout (or any io.Writer) is expensive compared to working in RAM, especially for lots of small writes. By building the line in RAM I reduce the number of system calls and get more predictable, flicker-free output. Assembling output before printing is generally good.
--   All files are just bytes: text, images, and programs are just different sequences of bytes on disk. Reverting a hex dump restores the original file exactly, so even executables work after chmod +x. Writing bytes directly (not as text) is what makes the file truly identical to the original.
+-   I first used `bufio.Reader.Read` for reading lines, but it can return fewer bytes than requested even if there's more data to read, which caused short lines to appear in the middle of the hex dump. `io.ReadFull` keeps reading until the buffer is full or EOF, so now only the last line can be short – this matches the real xxd output.
+-   Instead of writing each thing/byte/piece directly to stdout, use `strings.Builder` to build whole line or chunk in memory first. Writing to stdout (or any io.Writer) is expensive compared to working in RAM, especially for lots of small writes. By building the line in RAM I reduce the number of system calls and get more predictable, flicker-free output. Assembling output before printing is generally good.
 
 
 ## License
