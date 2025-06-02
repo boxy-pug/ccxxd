@@ -15,6 +15,7 @@ const (
 	defaultGroupSize             = 2
 	defaultGroupSizeLittleEndian = 4
 	defaultCols                  = 16
+	offsetCharWidth              = 10
 )
 
 type command struct {
@@ -27,6 +28,7 @@ type command struct {
 	maxBytes     int64 // -l <int> stop writing after len octets
 	startOffset  int64 // -s <offset> (which byte to start reading from)
 	revert       bool  // -r Reverse operation: convert (or patch) hex dump into binary
+	wantedWidth  int   // Helper for little endian formatting
 }
 
 func main() {
@@ -100,6 +102,10 @@ func loadCommand() (command, error) {
 	// Validate and fix up byte grouping as needed
 	cmd.groupSize = validateByteGrouping(cmd.groupSize, cmd.bytesPerLine)
 
+	if cmd.littleEndian && !isPowerOfTwo(cmd.groupSize) {
+		return cmd, fmt.Errorf("number of octets per group must be a power of 2 with -e")
+	}
+
 	// If little-endian output is requested and grouping=2, set grouping to 4 (xxd -e default)
 	if cmd.littleEndian && cmd.groupSize == defaultGroupSize {
 		cmd.groupSize = defaultGroupSizeLittleEndian
@@ -116,6 +122,11 @@ func (cmd *command) run() error {
 	if err != nil {
 		return err
 	}
+
+	if cmd.littleEndian {
+		cmd.wantedWidth = hexFieldWidth(cmd.bytesPerLine, cmd.groupSize)
+	}
+
 	// If input is a file, seek to requested offset
 	if seeker, ok := cmd.input.(io.Seeker); ok && cmd.startOffset > 0 {
 		_, err := seeker.Seek(cmd.startOffset, io.SeekStart)
@@ -148,10 +159,7 @@ func (cmd *command) run() error {
 	return nil
 }
 
-// I first used bufio.Reader.Read here, but it can return fewer bytes than requested
-// even if there's more data to read, which caused short lines to appear in the middle of the hex dump.
-// io.ReadFull keeps reading until the buffer is full or EOF, so now only the last line can be short—
-// this matches what real hex dump tools like xxd do.
+// readLine: Use io.ReadFull to ensure each line is filled unless at EOF, matching xxd behavior.
 func (cmd *command) readLine(reader *bufio.Reader, length int) ([]byte, error) {
 	buf := make([]byte, length) // Buffer for one output line
 	n, err := io.ReadFull(reader, buf)
@@ -172,11 +180,7 @@ func (cmd *command) readLine(reader *bufio.Reader, length int) ([]byte, error) {
 	}
 }
 
-// Instead of writing each thing directly to stdout, I use a strings.Builder to build
-// the whole line in memory first. Writing to stdout (or any io.Writer)
-// is expensive compared to working in RAM, especially for lots of small writes. 
-// By building the line in RAM I reduce the number of system calls and get more
-// predictable, flicker-free output. Assembling output before printing is generally good.
+// Printline builds the whole line in memory with strings.Builder, then writes it once for efficiency.
 func (cmd *command) printLine(offset int64, line []byte) {
 	var builder strings.Builder
 	lineLength := len(line)
@@ -237,8 +241,8 @@ func (cmd *command) printLittleEndianHex(line []byte, builder *strings.Builder) 
 			// After each group, insert a space to separate groups visually.
 			builder.WriteString(" ")
 		}
+
 	}
-	// to make it line up?
 	builder.WriteString(" ")
 	return length
 }
@@ -259,15 +263,31 @@ func isValidASCII(b byte) bool {
 	return b >= 32 && b <= 126
 }
 
+func isPowerOfTwo(n int) bool {
+	return n > 0 && (n&(n-1)) == 0
+}
+
 // Prints extra spaces at end of short lines, so ASCII lines up
 func (cmd *command) printHexPadding(bytesRead int, builder *strings.Builder) {
-	// For each missing byte, print "  " instead of hex
-	for i := bytesRead; i < cmd.bytesPerLine; i++ {
-		builder.WriteString("  ")
-		// Add group space if this would have been a group boundary
-		if (i+1)%cmd.groupSize == 0 {
+	if cmd.littleEndian {
+		// fmt.Printf("builder len is %v and cmd wanted width is %v\n", builder.Len(), cmd.wantedWidth)
+		// the 12 is the chars for offset printing
+		for builder.Len() < cmd.wantedWidth+2 {
+			// fmt.Printf("builder len is %v and cmd wanted width is %v\n", builder.Len(), cmd.wantedWidth)
 			builder.WriteString(" ")
 		}
+	} else {
+		// For each missing byte, print "  " instead of hex
+		for i := bytesRead; i < cmd.bytesPerLine; i++ {
+			builder.WriteString("  ")
+			// Add group space if this would have been a group boundary
+			if (i+1)%cmd.groupSize == 0 {
+				builder.WriteString(" ")
+			}
+		}
+		// if cmd.bytesPerLine%cmd.groupSize != 0 {
+		// builder.WriteString(" ")
+		// }
 	}
 }
 
@@ -312,14 +332,25 @@ func validateByteGrouping(bg, cols int) int {
 	}
 }
 
-// Reads hex dump from file, decodes, and writes raw binary to stdout
+// Helper for problematic little endian spacing before ascii
+func hexFieldWidth(cols, group int) int {
+	numGroups := (cols + group - 1) / group
+	width := numGroups * (group*2 + 1)
+	//if cols%group != 0 {
+	//	width++ // xxd adds an extra space if not evenly divisible
+	//}
+
+	return width + offsetCharWidth
+}
+
+// revertToBinary reads a hex dump and writes the decoded binary to output.
 func revertToBinary(file io.Reader, output io.Writer) error {
 	writer := bufio.NewWriter(output)
 	scanner := bufio.NewScanner(file)
 
 	for scanner.Scan() {
 		// Skip offset (first 10 chars), split at double space between hex and ascii
-		line := strings.Split(scanner.Text()[10:], "  ")
+		line := strings.Split(scanner.Text()[offsetCharWidth:], "  ")
 		cleanLine := strings.ReplaceAll(line[0], " ", "") // Remove spaces from hex
 		hexLine, err := hex.DecodeString(cleanLine)       // Decode hex to bytes
 		if err != nil {

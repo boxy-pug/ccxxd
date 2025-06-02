@@ -131,6 +131,18 @@ func TestXxdUnitRun(t *testing.T) {
 			want: `00000000: 2021 2223 2425 2627 2829 2a2b 2c2d 2e2f   !"#$%&'()*+,-./
 `,
 		},
+		{
+			name:         "little endian -c11 -g4",
+			bytesPerLine: 11,
+			groupSize:    4,
+			littleEndian: true,
+			maxBytes:     -1,
+			startOffset:  0,
+			input:        "ABCDEhellogoodbye",
+			want: `00000000: 44434241 6c656845   676f6c   ABCDEhellog
+0000000b: 62646f6f     6579            oodbye
+`,
+		},
 	}
 
 	for _, tc := range tests {
