@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -11,20 +12,20 @@ import (
 )
 
 const (
-	defaultGroup             = 2
-	defaultGroupLittleEndian = 4
-	defaultCols              = 16
+	defaultGroupSize             = 2
+	defaultGroupSizeLittleEndian = 4
+	defaultCols                  = 16
 )
 
 type command struct {
-	file         io.Reader // Input file (or stdin)
+	input        io.Reader // Input file (or stdin)
 	output       io.Writer
-	endByte      int64 // Where to stop reading (byte offset)
+	endOffset    int64 // Where to stop reading (byte offset)
 	littleEndian bool  // -e Output in little-endian order
-	group        int   // -g <int> default 2, byte grouping
-	cols         int   // -c <int> octets per line. default 16
-	len          int64 // -l <int> stop writing after len octets
-	seek         int64 // -s <offset> (which byte to start reading from)
+	groupSize    int   // -g <int> default 2, byte grouping
+	bytesPerLine int   // -c <int> octets per line. default 16
+	maxBytes     int64 // -l <int> stop writing after len octets
+	startOffset  int64 // -s <offset> (which byte to start reading from)
 	revert       bool  // -r Reverse operation: convert (or patch) hex dump into binary
 }
 
@@ -37,7 +38,7 @@ func main() {
 
 	// If -r flag is set, convert hex dump to binary and exit
 	if cmd.revert {
-		err := revertToBinary(cmd.file)
+		err := revertToBinary(cmd.input, cmd.output)
 		if err != nil {
 			fmt.Println("error reverting to binary:", err)
 			os.Exit(1)
@@ -56,41 +57,52 @@ func loadCommand() (command, error) {
 		output: os.Stdout,
 	}
 
-	flag.BoolVar(&cmd.littleEndian, "e", false, "Switch to little-endian hex dump.")
-	flag.BoolVar(&cmd.revert, "r", false, "Reverse operation: convert (or patch) hex dump into binary.")
-	flag.IntVar(&cmd.group, "g", defaultGroup, "Separate the output of every <bytes> bytes (two hex characters or eight bit digits each) by a whitespace.")
-	flag.IntVar(&cmd.cols, "c", defaultCols, "Format <cols> octets per line. Default 16")
-	flag.Int64Var(&cmd.len, "l", -1, "Stop after writing <len> octets.")
-	flag.Int64Var(&cmd.seek, "s", 0, "Start at <seek> bytes abs. (or rel.) infile offset.")
+	flag.BoolVar(&cmd.littleEndian, "e", false, "Print hex output in little-endian order within each group.")
+	flag.BoolVar(&cmd.revert, "r", false, "Convert a hex dump back into binary (reverse operation).")
+	flag.IntVar(&cmd.groupSize, "g", defaultGroupSize, "Group hex output every <bytes> bytes, separated by a space")
+	flag.IntVar(&cmd.bytesPerLine, "c", defaultCols, "Number of bytes to display per line in the hex dump")
+	flag.Int64Var(&cmd.maxBytes, "l", -1, "Limit output to <len> bytes and then stop (default: dump entire input).")
+	flag.Int64Var(&cmd.startOffset, "s", 0, "Skip <seek> bytes from the start before dumping (default 0, i.e., start at beginning).")
+
+	flag.Usage = func() {
+		var res strings.Builder
+		res.WriteString("ccxxd - A flexible hex dump and reverse tool\n\n")
+		res.WriteString(`Description:
+  ccxxd displays a hex dump of a file or standard input, similar to the classic xxd tool.
+  It supports grouping bytes, custom column widths, little-endian output, offset and length control, and can also reverse a hex dump back into binary.
+
+  If no file is provided, ccxxd reads from standard input.
+
+`)
+		res.WriteString("Usage: ccxxd [options] [file]\n")
+		fmt.Fprintln(os.Stderr, res.String())
+		flag.PrintDefaults()
+	}
 
 	flag.Parse()
 	args := flag.Args()
 
 	switch len(args) {
 	case 0:
-		cmd.file = os.Stdin
+		cmd.input = os.Stdin
 	case 1:
-		cmd.file, err = os.Open(args[0])
+		cmd.input, err = os.Open(args[0])
 		if err != nil {
 			fmt.Printf("error opening %v as file: %v", args[0], err)
 			os.Exit(1)
 		}
 	default:
+		fmt.Fprintf(os.Stderr, "too many args: %v\n", args)
 		flag.Usage()
-		return cmd, fmt.Errorf("too many args, check usage: %v", args)
-	}
-
-	cmd.endByte, err = getEndByte(cmd.len, cmd.file)
-	if err != nil {
-		return cmd, err
+		os.Exit(1)
 	}
 
 	// Validate and fix up byte grouping as needed
-	cmd.group = validateByteGrouping(cmd.group, cmd.cols)
+	cmd.groupSize = validateByteGrouping(cmd.groupSize, cmd.bytesPerLine)
 
 	// If little-endian output is requested and grouping=2, set grouping to 4 (xxd -e default)
-	if cmd.littleEndian && cmd.group == defaultGroup {
-		cmd.group = defaultGroupLittleEndian
+	if cmd.littleEndian && cmd.groupSize == defaultGroupSize {
+		cmd.groupSize = defaultGroupSizeLittleEndian
 	}
 
 	return cmd, nil
@@ -98,23 +110,29 @@ func loadCommand() (command, error) {
 
 // Main hex dump loop: reads bytes, formats, and prints each line
 func (cmd *command) run() error {
+	var err error
+	// determine where reading should end
+	cmd.endOffset, err = getEndByte(cmd.maxBytes, cmd.startOffset, cmd.input)
+	if err != nil {
+		return err
+	}
 	// If input is a file, seek to requested offset
-	if seeker, ok := cmd.file.(io.Seeker); ok && cmd.seek > 0 {
-		_, err := seeker.Seek(cmd.seek, io.SeekStart)
+	if seeker, ok := cmd.input.(io.Seeker); ok && cmd.startOffset > 0 {
+		_, err := seeker.Seek(cmd.startOffset, io.SeekStart)
 		if err != nil {
 			return fmt.Errorf("error setting offset: %v", err)
 		}
 	}
 
-	reader := bufio.NewReader(cmd.file)
-	offset := cmd.seek // Tracks current byte offset for hex display
+	reader := bufio.NewReader(cmd.input)
+	offset := cmd.startOffset // Tracks current byte offset for hex display
 
 	// Loop until we've read up to endByte
-	for offset < cmd.endByte {
+	for offset < cmd.endOffset {
 
 		// Pass in how many bytes were supposed to read
 		// which is the smallest of cols or bytes left until endbytes
-		length := min(int64(cmd.cols), cmd.endByte-offset)
+		length := min(int64(cmd.bytesPerLine), cmd.endOffset-offset)
 
 		lineBytes, err := cmd.readLine(reader, int(length))
 		if err != nil {
@@ -182,12 +200,12 @@ func (cmd *command) printLine(offset int64, line []byte) {
 func (cmd *command) printHex(line []byte, builder *strings.Builder) {
 	for i, b := range line {
 		fmt.Fprintf(builder, "%02x", b)
-		if (i+1)%cmd.group == 0 {
+		if (i+1)%cmd.groupSize == 0 {
 			builder.WriteString(" ")
 		}
 	}
 	// ensures a double space before ascii if
-	if cmd.cols%cmd.group != 0 {
+	if cmd.bytesPerLine%cmd.groupSize != 0 {
 		builder.WriteString(" ")
 	}
 }
@@ -197,16 +215,16 @@ func (cmd *command) printHex(line []byte, builder *strings.Builder) {
 func (cmd *command) printLittleEndianHex(line []byte, builder *strings.Builder) int {
 	length := len(line)
 
-	for i := 0; i < len(line); i += cmd.group {
+	for i := 0; i < len(line); i += cmd.groupSize {
 		// Compute the end index for this group. If we're at the end of the line and don't have a full group,
 		// 'end' will be less than i+cmd.byteGrouping.
 		start := i
-		end := i + cmd.group
+		end := i + cmd.groupSize
 		end = min(end, len(line))
 
 		// Add left side padding to byte group
-		if end-start < cmd.group {
-			for range cmd.group - (end - start) {
+		if end-start < cmd.groupSize {
+			for range cmd.groupSize - (end - start) {
 				builder.WriteString("  ")
 				length++
 			}
@@ -244,28 +262,41 @@ func isValidASCII(b byte) bool {
 // Prints extra spaces at end of short lines, so ASCII lines up
 func (cmd *command) printHexPadding(bytesRead int, builder *strings.Builder) {
 	// For each missing byte, print "  " instead of hex
-	for i := bytesRead; i < cmd.cols; i++ {
+	for i := bytesRead; i < cmd.bytesPerLine; i++ {
 		builder.WriteString("  ")
 		// Add group space if this would have been a group boundary
-		if (i+1)%cmd.group == 0 {
+		if (i+1)%cmd.groupSize == 0 {
 			builder.WriteString(" ")
 		}
 	}
 }
 
 // Returns the end byte offset for the dump (either file size or user-specified length)
-func getEndByte(len int64, file io.Reader) (int64, error) {
-	if len >= 0 {
-		return len, nil
-	}
-	if f, ok := file.(*os.File); ok {
-		info, err := f.Stat()
+func getEndByte(maxBytes, startOffset int64, file io.Reader) (int64, error) {
+	var totalLen int64
+
+	switch r := file.(type) {
+	case *os.File:
+		info, err := r.Stat()
 		if err != nil {
 			return 0, err
 		}
-		return info.Size(), nil
+		totalLen = info.Size()
+	case *strings.Reader:
+		totalLen = int64(r.Len())
+	case *bytes.Buffer:
+		totalLen = int64(r.Len())
+	case *bytes.Reader:
+		totalLen = int64(r.Len())
+	default:
+		// fallback: assume "infinite" (read until EOF)
+		totalLen = 1<<63 - 1
 	}
-	return 0, nil
+
+	if maxBytes >= 0 {
+		return startOffset + maxBytes, nil
+	}
+	return totalLen, nil
 }
 
 // Ensures byte grouping is valid (positive, <= cols, etc.)
@@ -282,8 +313,8 @@ func validateByteGrouping(bg, cols int) int {
 }
 
 // Reads hex dump from file, decodes, and writes raw binary to stdout
-func revertToBinary(file io.Reader) error {
-	writer := bufio.NewWriter(os.Stdout)
+func revertToBinary(file io.Reader, output io.Writer) error {
+	writer := bufio.NewWriter(output)
 	scanner := bufio.NewScanner(file)
 
 	for scanner.Scan() {

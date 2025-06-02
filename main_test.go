@@ -8,111 +8,129 @@ import (
 
 func TestRun(t *testing.T) {
 	tests := []struct {
-		name   string
-		cols   int
-		group  int
-		endian bool
-		input  string
-		want   string
+		name         string
+		bytesPerLine int
+		groupSize    int
+		littleEndian bool
+		maxBytes     int64
+		startOffset  int64
+		input        string
+		want         string
 	}{
 		{
-			name:   "Special chars, default config",
-			cols:   16,
-			group:  2,
-			endian: false,
-			input:  "Hello123?$€Æ😊",
+			name:         "Special chars, default config",
+			bytesPerLine: 16,
+			groupSize:    2,
+			littleEndian: false,
+			maxBytes:     -1,
+			startOffset:  0,
+			input:        "Hello123?$€Æ😊",
 			want: `00000000: 4865 6c6c 6f31 3233 3f24 e282 acc3 86f0  Hello123?$......
 00000010: 9f98 8a                                  ...
 `,
 		},
 		{
-			name:   "Little endian default config",
-			cols:   16,
-			group:  4,
-			endian: true,
-			input:  "Hello123?$€Æ😊",
+			name:         "Little endian default config",
+			bytesPerLine: 16,
+			groupSize:    4,
+			littleEndian: true,
+			maxBytes:     -1,
+			startOffset:  0,
+			input:        "Hello123?$€Æ😊",
 			want: `00000000: 6c6c6548 3332316f 82e2243f f086c3ac   Hello123?$......
 00000010:   8a989f                              ...
 `,
 		},
 		{
-			name:   "Partial line at EOF",
-			cols:   8,
-			group:  2,
-			endian: false,
-			input:  "ABCD",
-			want:   "00000000: 4142 4344            ABCD\n",
+			name:         "Partial line at EOF",
+			bytesPerLine: 8,
+			groupSize:    2,
+			littleEndian: false,
+			maxBytes:     -1,
+			startOffset:  0,
+			input:        "ABCD",
+			want:         "00000000: 4142 4344            ABCD\n",
 		},
 		{
-			name:   "Column width 4, group 2",
-			cols:   4,
-			group:  2,
-			endian: false,
-			input:  "123456",
+			name:         "Column width 4, group 2",
+			bytesPerLine: 4,
+			groupSize:    2,
+			littleEndian: false,
+			maxBytes:     -1,
+			startOffset:  0,
+			input:        "123456",
 			want: `00000000: 3132 3334  1234
 00000004: 3536       56
 `,
 		},
 		{
-			name:   "Column width 11, group 5",
-			cols:   11,
-			group:  5,
-			endian: false,
-			input:  "abcdefghijABCDEFGHIJ",
+			name:         "Column width 11, group 5",
+			bytesPerLine: 11,
+			groupSize:    5,
+			littleEndian: false,
+			maxBytes:     -1,
+			startOffset:  0,
+			input:        "abcdefghijABCDEFGHIJ",
 			want: `00000000: 6162636465 666768696a 41  abcdefghijA
 0000000b: 4243444546 4748494a       BCDEFGHIJ
 `,
 		},
 		{
-			name:   "Little endian, group 4, cols 8, partial group",
-			cols:   8,
-			group:  4,
-			endian: true,
-			input:  "ABCDE",
+			name:         "Little endian, group 4, cols 8, partial group",
+			bytesPerLine: 8,
+			groupSize:    4,
+			littleEndian: true,
+			maxBytes:     -1,
+			startOffset:  0,
+			input:        "ABCDE",
 			want: `00000000: 44434241       45   ABCDE
 `,
 		},
+		{
+			name:         "Byte limit 5",
+			bytesPerLine: 16,
+			groupSize:    2,
+			littleEndian: false,
+			maxBytes:     5,
+			startOffset:  0,
+			input:        "abcdefghij",
+			// If len=5, only first 5 bytes
+			want: "00000000: 6162 6364 65                             abcde\n",
+		},
+		{
+			name:         "Seek to byte 3",
+			bytesPerLine: 16,
+			groupSize:    2,
+			littleEndian: false,
+			maxBytes:     -1,
+			startOffset:  3,
+			input:        "abcdefghij",
+			// If len=5, only first 5 bytes
+			want: "00000003: 6465 6667 6869 6a                        defghij\n",
+		},
 
-		/*
-					{
-						name:   "Seek offset (simulate by skipping bytes)",
-						cols:   8,
-						group:  2,
-						endian: false,
-						input:  "1234567890",
-						// If seek=2, skips '1' and '2'
-						want: `00000000: 3334 3536 3738 3930  34567890
-			`,
-					},
-					{
-						name:   "Byte limit (simulate with short input)",
-						cols:   8,
-						group:  2,
-						endian: false,
-						input:  "abcdefghij",
-						// If len=5, only first 5 bytes
-						want: `00000000: 6162 6364 65         abcde
-			`,
-					},
-					{
-						name:   "Non-printable bytes",
-						cols:   8,
-						group:  2,
-						endian: false,
-						input:  string([]byte{0x00, 0x01, 0x02, 0x41, 0x42, 0x43, 0x7f, 0x80}),
-						want: `00000000: 0001 0241 4243 7f80  ...ABC..
-			`,
-					},
-					{
-						name:   "All printable ASCII",
-						cols:   16,
-						group:  4,
-						endian: false,
-						input:  " !\"#$%&'()*+,-./",
-						want: `00000000: 2021 2223 2425 2627 2829 2a2b 2c2d 2e2f   !"#$%&'()*+,-./
-			`,
-					},
-		*/
+		{
+			name:         "Non-printable bytes",
+			bytesPerLine: 8,
+			groupSize:    2,
+			littleEndian: false,
+			maxBytes:     -1,
+			startOffset:  0,
+			input:        string([]byte{0x00, 0x01, 0x02, 0x41, 0x42, 0x43, 0x7f, 0x80}),
+			want: `00000000: 0001 0241 4243 7f80  ...ABC..
+`,
+		},
+		{
+			name:         "All printable ASCII",
+			bytesPerLine: 16,
+			groupSize:    2,
+			littleEndian: false,
+			maxBytes:     -1,
+			startOffset:  0,
+			input:        " !\"#$%&'()*+,-./",
+			want: `00000000: 2021 2223 2425 2627 2829 2a2b 2c2d 2e2f   !"#$%&'()*+,-./
+`,
+		},
 	}
 
 	for _, tc := range tests {
@@ -120,11 +138,12 @@ func TestRun(t *testing.T) {
 			var out bytes.Buffer
 			cmd := command{
 				output:       &out,
-				file:         strings.NewReader(tc.input),
-				cols:         tc.cols,
-				group:        tc.group,
-				littleEndian: tc.endian,
-				endByte:      int64(len(tc.input)),
+				input:        strings.NewReader(tc.input),
+				bytesPerLine: tc.bytesPerLine,
+				groupSize:    tc.groupSize,
+				littleEndian: tc.littleEndian,
+				maxBytes:     tc.maxBytes,
+				startOffset:  tc.startOffset,
 			}
 			err := cmd.run()
 			assertNoError(t, err)
@@ -132,6 +151,22 @@ func TestRun(t *testing.T) {
 			got := out.String()
 			assertEqual(t, got, tc.want)
 		})
+	}
+}
+
+func TestRevertToBinary(t *testing.T) {
+	original := []byte("Hello, world!\n")
+	hexDump := "00000000: 4865 6c6c 6f2c 2077 6f72 6c64 210a       Hello, world!.\n"
+
+	input := strings.NewReader(hexDump)
+	var output bytes.Buffer
+
+	err := revertToBinary(input, &output)
+	assertNoError(t, err)
+
+	got := output.Bytes()
+	if !bytes.Equal(got, original) {
+		t.Errorf("output does not match original\nGOT:  %q\nWANT: %q", got, original)
 	}
 }
 
