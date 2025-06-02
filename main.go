@@ -42,14 +42,18 @@ func main() {
 	if cmd.revert {
 		err := revertToBinary(cmd.input, cmd.output)
 		if err != nil {
-			fmt.Println("error reverting to binary:", err)
+			fmt.Fprintln(cmd.output, "error reverting to binary:", err)
 			os.Exit(1)
 		}
 		return
 	}
 
 	// perform normal hex dump
-	cmd.run()
+	err = cmd.run()
+	if err != nil {
+		fmt.Fprintln(cmd.output, "error running command:", err)
+		os.Exit(1)
+	}
 }
 
 // Parses command-line arguments, sets up the command struct, and opens file/stdin
@@ -65,21 +69,6 @@ func loadCommand() (command, error) {
 	flag.IntVar(&cmd.bytesPerLine, "c", defaultCols, "Number of bytes to display per line in the hex dump")
 	flag.Int64Var(&cmd.maxBytes, "l", -1, "Limit output to <len> bytes and then stop (default: dump entire input).")
 	flag.Int64Var(&cmd.startOffset, "s", 0, "Skip <seek> bytes from the start before dumping (default 0, i.e., start at beginning).")
-
-	flag.Usage = func() {
-		var res strings.Builder
-		res.WriteString("ccxxd - A flexible hex dump and reverse tool\n\n")
-		res.WriteString(`Description:
-  ccxxd displays a hex dump of a file or standard input, similar to the classic xxd tool.
-  It supports grouping bytes, custom column widths, little-endian output, offset and length control, and can also reverse a hex dump back into binary.
-
-  If no file is provided, ccxxd reads from standard input.
-
-`)
-		res.WriteString("Usage: ccxxd [options] [file]\n")
-		fmt.Fprintln(os.Stderr, res.String())
-		flag.PrintDefaults()
-	}
 
 	flag.Parse()
 	args := flag.Args()
@@ -100,15 +89,9 @@ func loadCommand() (command, error) {
 	}
 
 	// Validate and fix up byte grouping as needed
-	cmd.groupSize = validateByteGrouping(cmd.groupSize, cmd.bytesPerLine)
-
-	if cmd.littleEndian && !isPowerOfTwo(cmd.groupSize) {
-		return cmd, fmt.Errorf("number of octets per group must be a power of 2 with -e")
-	}
-
-	// If little-endian output is requested and grouping=2, set grouping to 4 (xxd -e default)
-	if cmd.littleEndian && cmd.groupSize == defaultGroupSize {
-		cmd.groupSize = defaultGroupSizeLittleEndian
+	cmd.groupSize, err = validateByteGrouping(cmd.groupSize, cmd.bytesPerLine, cmd.littleEndian)
+	if err != nil {
+		return cmd, err
 	}
 
 	return cmd, nil
@@ -193,7 +176,7 @@ func (cmd *command) printLine(offset int64, line []byte) {
 		// needs to return bytecount bcs of left side padding added
 		lineLength = cmd.printLittleEndianHex(line, &builder)
 	}
-	fmt.Fprint(&builder, " ")
+	// fmt.Fprint(&builder, " ")
 	cmd.printHexPadding(lineLength, &builder)
 	cmd.printASCII(line, &builder)
 	fmt.Fprintln(cmd.output, builder.String())
@@ -263,16 +246,14 @@ func isValidASCII(b byte) bool {
 	return b >= 32 && b <= 126
 }
 
-func isPowerOfTwo(n int) bool {
-	return n > 0 && (n&(n-1)) == 0
-}
-
 // Prints extra spaces at end of short lines, so ASCII lines up
 func (cmd *command) printHexPadding(bytesRead int, builder *strings.Builder) {
+	builder.WriteString(" ")
+
 	if cmd.littleEndian {
 		// fmt.Printf("builder len is %v and cmd wanted width is %v\n", builder.Len(), cmd.wantedWidth)
 		// the 12 is the chars for offset printing
-		for builder.Len() < cmd.wantedWidth+2 {
+		for builder.Len() < cmd.wantedWidth {
 			// fmt.Printf("builder len is %v and cmd wanted width is %v\n", builder.Len(), cmd.wantedWidth)
 			builder.WriteString(" ")
 		}
@@ -285,9 +266,6 @@ func (cmd *command) printHexPadding(bytesRead int, builder *strings.Builder) {
 				builder.WriteString(" ")
 			}
 		}
-		// if cmd.bytesPerLine%cmd.groupSize != 0 {
-		// builder.WriteString(" ")
-		// }
 	}
 }
 
@@ -320,25 +298,60 @@ func getEndByte(maxBytes, startOffset int64, file io.Reader) (int64, error) {
 }
 
 // Ensures byte grouping is valid (positive, <= cols, etc.)
-func validateByteGrouping(bg, cols int) int {
-	if bg < 0 {
-		return 2
-	} else if bg == 0 {
-		return cols
-	} else if bg > cols {
-		return cols
-	} else {
-		return bg
+// In little endian number of octets must be a power of 2
+// If little-endian output is requested and grouping=2, set grouping to 4 (xxd -e default)
+func validateByteGrouping(groupSize, bytesPerLine int, littleEndian bool) (int, error) {
+	switch {
+	case littleEndian && !isPowerOfTwo(groupSize):
+		return 0, fmt.Errorf("number of octets per group must be a power of 2 with -e")
+	case littleEndian && groupSize == defaultGroupSize:
+		return defaultGroupSizeLittleEndian, nil
+	case groupSize < 0:
+		return defaultGroupSize, nil
+	case groupSize == 0:
+		return bytesPerLine, nil
+	case groupSize > bytesPerLine:
+		return bytesPerLine, nil
+	default:
+		return groupSize, nil
 	}
 }
 
+// isPowerOfTwo returns true if n is a positive power of two.
+// checks that n has only one bit set in binary.
+// For example, 8 (1000 in binary) is a power of two, but 6 (0110) is not.
+//
+//   - A power of two in binary has exactly one '1' bit (e.g. 8 = 1000).
+//   - Subtracting 1 flips all bits after the first '1' (e.g. 8-1 = 7 = 0111).
+//   - The bitwise AND of n and n-1 is zero only for powers of two.
+func isPowerOfTwo(n int) bool {
+	return n > 0 && (n&(n-1)) == 0
+}
+
+// hexFieldWidth calculates the total width of the hex field before the ASCII panel.
+// This ensures the ASCII column always aligns,
+// especially in little-endian mode with odd group/column sizes.
+//
+// The width includes:
+//   - 2 hex digits per byte
+//   - 1 space after each group
+//   - 2 extra spaces for the gap before ASCII (as xxd does)
+//   - offsetCharWidth, which accounts for the "00000000: " offset prefix
+//
+// Example:
+//
+//	For cols=11, group=2:
+//	  numGroups = (11 + 2 - 1) / 2 = 6
+//	  width = 6 * (2*2 + 1) = 6 * 5 = 30
+//	  width += 2 (extra spaces) = 32
+//	  return width + offsetCharWidth
+//
 // Helper for problematic little endian spacing before ascii
 func hexFieldWidth(cols, group int) int {
 	numGroups := (cols + group - 1) / group
 	width := numGroups * (group*2 + 1)
-	//if cols%group != 0 {
-	//	width++ // xxd adds an extra space if not evenly divisible
-	//}
+	// gap before ascii
+	width += 2
 
 	return width + offsetCharWidth
 }

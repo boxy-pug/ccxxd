@@ -1,6 +1,6 @@
 # ccxxd
 
-`xxd` cli tool clone written in Go, built as a learning project for [CodingChallenges.fyi](https://codingchallenges.fyi/challenges/challenge-xxd).
+A hex dump `xxd` clone written in Go, built as a learning project for [CodingChallenges.fyi](https://codingchallenges.fyi/challenges/challenge-xxd).
 
 This tool displays a hex dump of any file or standard input, like the classic `xxd` utility. It supports grouping bytes (`-g`), custom column widths (`-c`), little-endian output (`-e`), offset (`-s`) and length control (`-l`), and can also reverse a hex dump back into binary (`-r`).
 
@@ -67,6 +67,7 @@ go test -tags=integration
 -   In the shell, single quotes `'...'` treat everything inside as literal text, so special characters and escape sequences like `\n` are not interpreted. Double quotes `"..."` allow for variable expansion and escape sequences, so `\n` becomes a real newline.
 -   I first used `bufio.Reader.Read` for reading lines, but it can return fewer bytes than requested even if there's more data to read, which caused short lines to appear in the middle of the hex dump. `io.ReadFull` keeps reading until the buffer is full or EOF, so now only the last line can be short – this matches the real xxd output.
 -   Instead of writing each thing/byte/piece directly to stdout, use `strings.Builder` to build whole line or chunk in memory first. Writing to stdout (or any io.Writer) is expensive compared to working in RAM, especially for lots of small writes. By building the line in RAM I reduce the number of system calls and get more predictable, flicker-free output. Assembling output before printing is generally good.
+-  For checking if a number is a power of two: `n > 0 && (n & (n-1)) == 0`, works because only binary nums with one positive bit is power of two. 
 
 
 ## License
@@ -75,3 +76,4 @@ This project is for fun and learning.
 Feel free to check out, use, or modify the code as you like!
 
 Licensed under the MIT License.
+
